@@ -1,0 +1,157 @@
+---
+title: "Practical Machine Learning Course Project"
+output: html_document
+---
+#####Nick Franciose
+
+###Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health and find patterns in their behavior. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+```{r}
+#Load relevant packages
+library(AppliedPredictiveModeling)
+library(caret)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(randomForest)
+library(knitr)
+library(RColorBrewer)
+library(ggplot2)
+library(plyr)
+#Read files and replace zeros with NA
+train <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""), header=TRUE)
+test <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""), header=TRUE)
+```
+
+####Clean the data
+
+First we need to clean the training dataset to include only the variables we want to use as predictors (sensor data) of our outcomes (classe).  
+```{r}
+#Remove the first seven columns
+train <- train[-c(1:7)]
+
+#Clean variables with more than 70% NA
+
+cleanedtrain<- train
+for(i in 1:length(train)) {
+    if( sum( is.na( train[, i] ) ) /nrow(train) >= .7) {
+        for(j in 1:length(cleanedtrain)) {
+            if( length( grep(names(train[i]), names(cleanedtrain)[j]) ) == 1)  {
+                cleanedtrain <- cleanedtrain[ , -j]
+            }   
+        } 
+    }
+}
+
+# Set back to the original variable name
+train <- cleanedtrain
+rm(cleanedtrain); rm(i); rm(j)
+```
+
+Now that we have cleaned the dataset to exclude extraneous variables, let's look at a few of the predictors we have to work with: 
+
+```{r}
+#Explore the Test Data
+ggplot(train, aes(total_accel_belt, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+ggplot(train, aes(total_accel_arm, colour = classe, fill = classe)) +geom_density(alpha = 0.1)
+ggplot(train, aes(total_accel_dumbbell, colour = classe, fill = classe)) +geom_density(alpha = 0.1)
+ggplot(train, aes(total_accel_forearm, colour = classe, fill = classe)) +geom_density(alpha = 0.1)
+```
+
+In order to use the 52 predictor distributions to predict the classe variable, let's partition our training set into a smaller training set and new test set.  
+
+```{r}
+#Partioning the training set into two
+trainPart <- createDataPartition(train$classe, p=0.6, list=FALSE)
+myTrain <- train[trainPart, ]
+myTest <- train[-trainPart, ]
+dim(myTrain); dim(myTest)
+```
+
+#Training and Testing Predictive Models
+
+Let's train and test a few different predictive models on the newly partitioned training and test sets.  Let's start with a simple Classification Tree.  
+
+```{r}
+#Classification Tree
+
+set.seed(345)
+ctFit <- train(myTrain$classe ~ ., data = myTrain, method="rpart")
+print(ctFit, digits=3)
+
+fancyRpartPlot(ctFit$finalModel)
+```
+
+Now let's test that classification tree model on our test set.  
+
+```{r}
+#Apply Classification tree to myTest
+ctPredictions <- predict(ctFit, newdata=myTest)
+print(confusionMatrix(ctPredictions, myTest$classe), digits=4)
+```
+
+The accuracy of this model is fairly low.  Let's see if we can improve on this by boosting with trees.  
+
+```{r}
+#Create a prediction model using boosting with Trees
+
+#TRAIN
+gbmFit <- train(classe ~ ., data = train, method = "gbm", verbose = FALSE)
+
+#Test Boosting with Trees model
+gbmPrediction <- predict(gbmFit, myTest)
+confusionMatrix(gbmPrediction, myTest$classe)
+```
+
+This model performed much better than a simple classification model, with accuracy of over 97%.  Let's see if a random forest model can deliver improved performance still.  
+
+```{r}
+#Create Random Forest model
+set.seed(1500)
+random_forest=randomForest(classe~.,data=myTrain,ntree=500,importance=TRUE)
+random_forest
+```
+
+It's important to evaluate the error rate of our model.  We can see that by increasing the number of trees in our model, we decrease our error rate.  In the case of random forest models, we don't need to guard against overfitting with cross validation.  There is no need for cross validation because our "out of bag" prediction (represented by the black line on the error rate plot) is an internally calculated, unbiased estimate of the test set error.  
+
+```{r}
+plot(random_forest,main="Error Rate vs Number of Trees")
+```
+
+Now let's apply this random forest model to our test set to evaluate performance.
+
+```{r}
+rfPredictions = predict(random_forest, newdata=myTest)
+confusionMatrix(rfPredictions,myTest$classe)
+```
+
+This model is better than the boosted trees model, with an error rate less than one percent.  We can inspect which variables are most significant to the model: 
+
+```{r}
+#Explore Variable importance to Random Forest model
+varImpPlot(random_forest,type=2)
+```
+
+We can see that the five variables containing the most predictive signal are roll belt, yaw belt, pitch forearm, magnet dumbell z, and pitch belt.  Distributions of these variables can be viewed in the appendix.  
+
+#Final Prediction with Random Forest
+The random forest is the most accurate model we have used, so we will apply this model to generate our final prediction of our test set. 
+
+```{r}
+#Remove all unneeded columns
+test <-test[,c(8:11,37:49,60:68,84:86,102,113:124,140,151:160)]
+print(predict(random_forest, newdata=test))
+```
+
+#Appendix
+Distributions of the five most predictive variables in our random forest model can be seen below.
+
+```{r}
+ggplot(train, aes(roll_belt, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+ggplot(train, aes(yaw_belt, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+ggplot(train, aes(pitch_forearm, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+ggplot(train, aes(magnet_dumbbell_z, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+ggplot(train, aes(pitch_belt, colour = classe, fill = classe)) +geom_density(alpha = 0.1) 
+```
